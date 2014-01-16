@@ -35,6 +35,34 @@
 
 #include "fuse.h"
 
+//BEGIN WITH_TAINT_TRACKING
+// PJG: from attr/xattr.h
+extern int setxattr (const char *__path, const char *__name,
+		      const void *__value, size_t __size, int __flags);
+extern int lsetxattr (const char *__path, const char *__name,
+		      const void *__value, size_t __size, int __flags);
+extern int fsetxattr (int __filedes, const char *__name,
+		      const void *__value, size_t __size, int __flags);
+
+extern ssize_t getxattr (const char *__path, const char *__name,
+				void *__value, size_t __size);
+extern ssize_t lgetxattr (const char *__path, const char *__name,
+				void *__value, size_t __size);
+extern ssize_t fgetxattr (int __filedes, const char *__name,
+				void *__value, size_t __size);
+
+extern ssize_t listxattr (const char *__path, char *__list,
+				size_t __size);
+extern ssize_t llistxattr (const char *__path, char *__list,
+				size_t __size);
+extern ssize_t flistxattr (int __filedes, char *__list,
+				size_t __size);
+
+extern int removexattr (const char *__path, const char *__name);
+extern int lremovexattr (const char *__path, const char *__name);
+extern int fremovexattr (int __filedes,   const char *__name);
+//END WITH_TAINT_TRACKING
+
 /* README
  *
  * What is this?
@@ -1120,10 +1148,52 @@ static int handle_fuse_request(struct fuse *fuse, struct fuse_handler* handler,
         return handle_fsync(fuse, handler, hdr, req);
     }
 
-//    case FUSE_SETXATTR:
-//    case FUSE_GETXATTR:
+//BEGIN WITH_TAINT_TRACKING
 //    case FUSE_LISTXATTR:
 //    case FUSE_REMOVEXATTR:
+    case FUSE_SETXATTR: {
+        struct fuse_setxattr_in *req = data;
+        char path[PATH_MAX], value[XATTR_SIZE_MAX], name[XATTR_NAME_MAX];
+        int res;
+
+        lookup_node_and_path_by_id_locked(fuse, hdr->nodeid, path, PATH_MAX);
+ 
+        // data:
+        // struct fuse_setxattr_in
+        // char[] name (null-terminated string)
+        // byte[] value (req->size bytes)
+        
+        strncpy(name, ((char*) data) + sizeof(*req), XATTR_NAME_MAX);
+        memcpy(value, ((char*) data) + sizeof(*req) + strlen(name) + 1, req->size);
+
+        res = setxattr(path, name, value, req->size, 0); 
+         
+        fuse_status(fuse, hdr->unique, res ? -errno : 0);
+        return NO_STATUS;
+    }
+    case FUSE_GETXATTR: {
+        struct fuse_getxattr_in *req = data;
+        char path[PATH_MAX], value[XATTR_SIZE_MAX], name[XATTR_NAME_MAX];
+        int res;
+        
+        lookup_node_and_path_by_id_locked(fuse, hdr->nodeid, path, PATH_MAX);
+
+        // data:
+        // struct fuse_getxattr_in
+        // char[] name (null-terminated string)
+        
+        strncpy(name, ((char*) data) + sizeof(*req), XATTR_NAME_MAX);
+
+        res = getxattr(path, name, value, req->size); 
+        if (res < 0) {
+            fuse_status(fuse, hdr->unique, -errno);
+            return NO_STATUS;
+        }
+        
+        fuse_reply(fuse, hdr->unique, value, res);
+      return NO_STATUS;
+    }
+//END WITH_TAINT_TRACKING
     case FUSE_FLUSH: {
         return handle_flush(fuse, handler, hdr);
     }
